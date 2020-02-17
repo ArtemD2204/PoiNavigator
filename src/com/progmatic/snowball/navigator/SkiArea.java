@@ -11,13 +11,7 @@ import java.nio.file.Files;
 import java.nio.file.Paths;
 import java.text.DateFormat;
 import java.text.SimpleDateFormat;
-import java.util.ArrayList;
-import java.util.Date;
-import java.util.List;
-import java.util.Map;
-import java.util.Set;
-import java.util.TreeMap;
-import java.util.TreeSet;
+import java.util.*;
 
 import com.progmatic.snowball.utils.gpxparser.Point;
 import org.apache.log4j.Logger;
@@ -1724,7 +1718,7 @@ public class SkiArea {
 
     public static void main(String[] args) {
         // список всех LD из json
-        SkiArea skiArea = new SkiArea("./areas/207/data.json", "./areas/207/pois.json");
+        SkiArea skiArea = new SkiArea("./areas/132/data.json", "./areas/132/pois.json");
         try {
             //TreeMap<NodalPoint, ArriveInfo> arrives = skiArea.recalcTimeToFinish(new GeoPoint(47.1999652855942,11.9190948665161));
             TreeMap<NodalPoint, ArriveInfo> arrives = skiArea.recalcTimeToFinish(new GeoPoint(47.2631230546233, 11.9955315841124));
@@ -1732,9 +1726,9 @@ public class SkiArea {
                 NodalPoint np = entry.getKey();
                 ArriveInfo ai = entry.getValue();
                 //if (!entry.getKey().poiList.isEmpty())
-                    System.out.println(np + "; time to finish: " + ai.durationToFinish + "; " + np.poiList);
+//                    System.out.println(np + "; time to finish: " + ai.durationToFinish + "; " + np.poiList + ";");
             }
-            System.out.println(arrives.size());
+//            System.out.println(arrives.size());
         } catch (Exception e) {
             e.printStackTrace();
         }
@@ -1743,6 +1737,23 @@ public class SkiArea {
         GeoPoint start = new GeoPoint(47.2631230546233, 11.9955315841124);
         GeoPoint finish = new GeoPoint(47.26236473249, 12.1062837610822);
         OnPisteRoute fastestRoute = OnPisteNavigator.fastestRouteDejkstra(skiArea, start, finish);
-        System.out.println(fastestRoute);
+//        System.out.println(fastestRoute);
+
+        // requiredPOI содержит обязательные для посещения POI
+        Set<POI> requiredPOI = new HashSet<>();
+        List<NodalPoint> nodalPointList = new ArrayList<>(skiArea.nodalPoints.values());
+        for (int i = 10; i < skiArea.nodalPoints.size(); i+=5 ) {
+            requiredPOI.addAll(nodalPointList.get(i).poiList);
+        }
+        System.out.println(requiredPOI);
+        // Построение маршрута с наибольшим рейтингом, проходящего через обязательные POI, задаваемые в requiredPOI
+        SkiArea.NodalPoint startOfRoute = nodalPointList.get(0);
+        OnPisteRoute bestRoute = OnPisteNavigator.calculateBestRouteForRequiredPOI(skiArea, startOfRoute, requiredPOI, 1000, 36000);
+        System.out.println(bestRoute);
+        for(Transition transition : bestRoute.getTransitions()) {
+            List<POI> poiList = skiArea.nodalPoints.get(transition.gEnd).poiList;
+            if (!poiList.isEmpty())
+                System.out.println(poiList);
+        }
     }
 }
