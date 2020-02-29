@@ -1748,12 +1748,16 @@ public class SkiArea {
         System.out.println(requiredPOI);
         // Построение маршрута с наибольшим рейтингом, проходящего через обязательные POI, задаваемые в requiredPOI
         SkiArea.NodalPoint startOfRoute = nodalPointList.get(0);
-        OnPisteRoute bestRoute = OnPisteNavigator.calculateBestRouteForRequiredPOI(skiArea, startOfRoute, requiredPOI, 1000, 36000);
-        System.out.println(bestRoute);
-        for(Transition transition : bestRoute.getTransitions()) {
-            List<POI> poiList = skiArea.nodalPoints.get(transition.gEnd).poiList;
-            if (!poiList.isEmpty())
-                System.out.println(poiList);
+        try {
+            OnPisteRoute bestRoute = OnPisteNavigator.calculateBestRouteForRequiredPOI(skiArea, startOfRoute, requiredPOI, 1000, 30000);
+            System.out.println(bestRoute);
+            for(Transition transition : bestRoute.getTransitions()) {
+                List<POI> poiList = skiArea.nodalPoints.get(transition.gEnd).poiList;
+                if (!poiList.isEmpty())
+                    System.out.println(poiList);
+            }
+        } catch (Exception e) {
+            e.printStackTrace();
         }
     }
 }

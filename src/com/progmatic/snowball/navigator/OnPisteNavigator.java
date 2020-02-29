@@ -675,7 +675,7 @@ public class OnPisteNavigator extends Navigator {
 
         double nodalPointRating = 0.0;
         for (POI poi : nodalPoint.poiList) {
-            double poiOverallRating = 1000.0 * poi.rating / ((double) poi.duration + durationFromStartToPoint / 10);
+            double poiOverallRating = 1000.0 * poi.rating / ((double) poi.duration + durationFromStartToPoint);
             poiOverallRating = requiredPOI.contains(poi) ? poiOverallRating : (poiOverallRating / 5);
             nodalPointRating += poiOverallRating;
         }
@@ -687,57 +687,89 @@ public class OnPisteNavigator extends Navigator {
                                                          TreeMap<GeoPoint, SkiArea.NodalPoint> nodalPoints) {
         double newRouteRating = 0.0;
         double durationFromStartToPoint = 0.0;
-        List<GeoPoint> localPassedGeoPoints = new ArrayList<>(passedGeoPoints);
+        List<GeoPoint> localPassedGeoPoints = new LinkedList<>(passedGeoPoints);
         for (SkiArea.Transition transition : routeTransitions) {
             SkiArea.NodalPoint nodalPoint = nodalPoints.get(transition.gEnd);
             durationFromStartToPoint += transition.getDuration();
+            if(!localPassedGeoPoints.contains(transition.gEnd)) {
+                for (POI poi : nodalPoint.poiList) {
+                    durationFromStartToPoint += poi.duration;
+                }
+            }
             newRouteRating += calculateOverallRatingForNodalPoint(nodalPoint, requiredPOI, localPassedGeoPoints, durationFromStartToPoint);
             localPassedGeoPoints.add(transition.gEnd);
         }
         return newRouteRating;
     }
 
-    // Длительность возможного маршрута: onPisteRoute + new Transition + fastestRouteDejkstra to begin of onPisteRoute
-    private static double calculatePossibleRouteDuration(SkiArea area, OnPisteRoute route, SkiArea.Transition transition) {
-        return route.getDuration() + transition.getDuration()
-                + fastestRouteDejkstra(area, transition.gEnd, route.getStart()).getDuration();
+    // Длительность возможного маршрута: пройденный маршрут + новые транзишны + возвращение в точку старта
+    private static double calculateRouteDuration(double durationOfTraveledRoute, double durationOfAllNewTransitions,
+                                                 double durationToStartOfRingRoute) {
+
+        return durationOfTraveledRoute + durationOfAllNewTransitions
+                + durationToStartOfRingRoute;
     }
 
-    private static double calculateSumDurationForListOfTransitions(List<SkiArea.Transition> transitionsList) {
+    // время прохода по транзишнам из списка transitionsList с учетом затрат времени на осмотр POI
+    private static double calculateSumDurationForListOfTransitions(List<SkiArea.Transition> transitionsList, List<GeoPoint> passedGeoPoints,
+                                                                   TreeMap<GeoPoint, SkiArea.NodalPoint> nodalPoints) {
+
         double sumDuration = 0.0;
+        List<GeoPoint> localPassedGeoPoints = new LinkedList<>(passedGeoPoints);
         for (SkiArea.Transition transition : transitionsList) {
+            GeoPoint newGeoPoint = transition.gEnd;
+            if(!localPassedGeoPoints.contains(newGeoPoint)) {
+                SkiArea.NodalPoint newNodalPoint = nodalPoints.get(newGeoPoint);
+                for (POI poi : newNodalPoint.poiList) {
+                    sumDuration += poi.duration;
+                }
+                localPassedGeoPoints.add(newGeoPoint);
+            }
             sumDuration += transition.getDuration();
         }
         return sumDuration;
     }
 
-    private static Queue<List<SkiArea.Transition>> createQueueOfTransitionsLists(SkiArea area, SkiArea.NodalPoint startOfRoute, double durationOfSearchRoute,
-                                                                                 OnPisteRoute traveledRoute, double timeLimit) {
+    private static Queue<List<SkiArea.Transition>> createQueueOfTransitionsLists(SkiArea.NodalPoint startOfSearch, double durationOfSearch,
+                                                                                 double timeLimitForEntireRoute, double durationOfTraveledRoute,
+                                                                                 TreeMap<NodalPoint, ArriveInfo> arrives,
+                                                                                 TreeMap<GeoPoint, SkiArea.NodalPoint> nodalPoints,
+                                                                                 List<GeoPoint> passedGeoPoints) {
 
         Queue<List<SkiArea.Transition>> routeTransitionsQueue = new LinkedList<>();
-        // Все transitions, которые выходят из начальной точки маршрута (т.е. 1-й шаг)
-        for (Transition transition : startOfRoute.transitionsFrom) {
-            if (calculatePossibleRouteDuration(area, traveledRoute, transition) < timeLimit
-                    && durationOfSearchRoute >= transition.getDuration()
-            ) {
-                List<SkiArea.Transition> routeTransitions = new ArrayList<>();
-                routeTransitions.add(transition);
+        // перебор всех транзишнов, которые выходят из начальной точки маршрута (т.е. 1-й шаг)
+        for (Transition transition : startOfSearch.transitionsFrom) {
+            GeoPoint endGeoPoint = transition.gEnd;
+            SkiArea.NodalPoint endNodalPoint = nodalPoints.get(endGeoPoint);
+            List<SkiArea.Transition> routeTransitions = new LinkedList<>();
+            routeTransitions.add(transition);
+            double durationOfNewTransitions = calculateSumDurationForListOfTransitions(routeTransitions, passedGeoPoints, nodalPoints);
+            double ringRouteDuration = calculateRouteDuration(durationOfTraveledRoute, durationOfNewTransitions,
+                    arrives.get(endNodalPoint).durationToFinish);
+            if (ringRouteDuration < timeLimitForEntireRoute && durationOfNewTransitions < durationOfSearch) {
                 routeTransitionsQueue.add(routeTransitions);
             }
         }
 
-        // в цикле  transitions 2-го, 3-го шага и т.д. до суммарной длительности durationOfSearchRoute
-        while (!routeTransitionsQueue.isEmpty()) {
-            if (calculateSumDurationForListOfTransitions(routeTransitionsQueue.peek()) >= durationOfSearchRoute)
-                break;
+        // в цикле перебор всех транзишнов 2-го, 3-го шага и т.д. до суммарной длительности durationOfSearch
+        double durationOfNewTransitions = 0;
+        while (!routeTransitionsQueue.isEmpty() && durationOfNewTransitions < durationOfSearch) {
 
             List<SkiArea.Transition> routeTransitions = routeTransitionsQueue.remove();
-            GeoPoint endGeoPoint = routeTransitions.get(routeTransitions.size() - 1).gEnd;
-            SkiArea.NodalPoint endNodalPoint = area.nodalPoints.get(endGeoPoint);
-            for (Transition transition : endNodalPoint.transitionsFrom) {
-                List<SkiArea.Transition> newRouteTransitions = new ArrayList<>(routeTransitions);
+            GeoPoint startGeoPoint = routeTransitions.get(routeTransitions.size() - 1).gEnd;
+            SkiArea.NodalPoint startNodalPoint = nodalPoints.get(startGeoPoint);
+
+            for (Transition transition : startNodalPoint.transitionsFrom) {
+                GeoPoint endGeoPoint = transition.gEnd;
+                SkiArea.NodalPoint endNodalPoint = nodalPoints.get(endGeoPoint);
+                List<SkiArea.Transition> newRouteTransitions = new LinkedList<>(routeTransitions);
                 newRouteTransitions.add(transition);
-                routeTransitionsQueue.add(newRouteTransitions);
+                durationOfNewTransitions = calculateSumDurationForListOfTransitions(newRouteTransitions, passedGeoPoints, nodalPoints);
+                double ringRouteDuration = calculateRouteDuration(durationOfTraveledRoute, durationOfNewTransitions,
+                        arrives.get(endNodalPoint).durationToFinish);
+                if (ringRouteDuration < timeLimitForEntireRoute && durationOfNewTransitions < durationOfSearch) {
+                    routeTransitionsQueue.add(newRouteTransitions);
+                }
             }
         }
 
@@ -745,35 +777,40 @@ public class OnPisteNavigator extends Navigator {
     }
 
     public static OnPisteRoute calculateBestRouteForRequiredPOI(SkiArea area, SkiArea.NodalPoint startOfRoute, Set<POI> requiredPOI,
-                                                                double durationOfSearchRoute, double timeLimit) {
+                                                                double durationOfSearch, double timeLimitForEntireRoute) throws Exception {
+
         TreeMap<GeoPoint, SkiArea.NodalPoint> nodalPoints = area.getNodalPoints();
         GeoPoint startPoint = startOfRoute.point;
+        TreeMap<NodalPoint, ArriveInfo> arrives = area.recalcTimeToFinish(startPoint);
         Set<POI> remainedRequiredPOI = new HashSet<>(requiredPOI);
         for (POI poi : startOfRoute.poiList) {
             remainedRequiredPOI.remove(poi);
         }
         // В passedGeoPoints сохраняем пройденные точки
-        List<GeoPoint> passedGeoPoints = new ArrayList<>();
+        List<GeoPoint> passedGeoPoints = new LinkedList<>();
         passedGeoPoints.add(startPoint);
 
         // Расчет среднего значения длительности от startPoint до обязательных POI
-        double sumDuration = 0.0;
+        double maxDuration = 0.0;
         for (POI poi : requiredPOI) {
-            sumDuration += fastestRouteDejkstra(area, startPoint, poi.point).getDuration();
+            SkiArea.NodalPoint nodalPoint = nodalPoints.get(poi.point);
+            maxDuration = Math.max(maxDuration, arrives.get(nodalPoint).durationToFinish + poi.duration);
         }
-        double averageDuration = sumDuration / requiredPOI.size();
-        // durationOfSearchRoute - глубина поиска, в секундах
-        durationOfSearchRoute = Math.max(durationOfSearchRoute, averageDuration);
+        maxDuration *= 2;
+        // durationOfSearch - глубина поиска, в секундах
+        durationOfSearch = Math.max(durationOfSearch, maxDuration);
 
         // результат - кольцевой маршрут OnPisteRoute
-        OnPisteRoute result = new OnPisteRoute(area, startPoint, startPoint);
+        OnPisteRoute resultRoute = new OnPisteRoute(area, startPoint, startPoint);
+        // durationOfTraveledRoute - длительность пройденного маршрута, включая время на осмотр POI
+        double durationOfTraveledRoute = 0;
 
         // В цикле while строим кольцевой маршрут OnPisteRoute. На каждой итерации цикла перебираем
-        // все маршруты длительностью durationOfSearchRoute, исходящие из точки startOfRoute
+        // все маршруты длительностью durationOfSearch, исходящие из точки startOfRoute
         while (!remainedRequiredPOI.isEmpty()) {
-            // Сформировать очередь из маршрутов длиной не более durationOfSearchRoute
-            Queue<List<SkiArea.Transition>> routeTransitionsQueue = createQueueOfTransitionsLists(area, startOfRoute,
-                    durationOfSearchRoute, result, timeLimit);
+            // Сформировать очередь из маршрутов длительностью не более durationOfSearch
+            Queue<List<SkiArea.Transition>> routeTransitionsQueue = createQueueOfTransitionsLists(startOfRoute,
+                    durationOfSearch, timeLimitForEntireRoute, durationOfTraveledRoute, arrives, nodalPoints, passedGeoPoints);
 
             // поиск списка List<SkiArea.Transition> с максимальным рейтингом
             double bestRouteRating = 0.0;
@@ -789,24 +826,27 @@ public class OnPisteNavigator extends Navigator {
             }
 
             // добавляем к общему маршруту первый транзишн из списка List<SkiArea.Transition>bestRouteTransitions
+            // и обновляем время пройденного маршрута durationOfTraveledRoute
             if (bestRouteTransitions != null) {
-                result.merge(new OnPisteRoute(area, bestRouteTransitions.get(0).gStart, bestRouteTransitions.get(0).gEnd,
+                GeoPoint newLastGeoPoint = bestRouteTransitions.get(0).gEnd;
+                resultRoute.merge(new OnPisteRoute(area, bestRouteTransitions.get(0).gStart, newLastGeoPoint,
                         bestRouteTransitions.subList(0, 1)));
-
-                // добавляем GeoPoint к passedGeoPoints и обновляем startOfRoute
-                passedGeoPoints.add(bestRouteTransitions.get(0).gEnd);
-                startOfRoute = nodalPoints.get(bestRouteTransitions.get(0).gEnd);
-                // удаляем POI из remainedRequiredPOI
-                for (POI poi : startOfRoute.poiList) {
-                    remainedRequiredPOI.remove(poi);
+                startOfRoute = nodalPoints.get(newLastGeoPoint); // обновляем startOfRoute
+                durationOfTraveledRoute += bestRouteTransitions.get(0).getDuration();
+                if(!passedGeoPoints.contains(newLastGeoPoint)) {
+                    for (POI poi : startOfRoute.poiList) {
+                        durationOfTraveledRoute += poi.duration;
+                        remainedRequiredPOI.remove(poi); // удаляем POI из remainedRequiredPOI
+                    }
+                    passedGeoPoints.add(newLastGeoPoint); // добавляем GeoPoint в список пройденных GeoPoint
                 }
             } else {
-                System.out.println("bestRouteTransitions = null");
+                System.out.println("Остались непройденные POI");
                 break;
             }
         }
-        result.merge(fastestRouteDejkstra(area, result.getEnd(), result.getStart()));
-        return result;
+        resultRoute.merge(fastestRouteDejkstra(area, resultRoute.getEnd(), resultRoute.getStart()));
+        return resultRoute;
     }
 
 
